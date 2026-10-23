@@ -6,7 +6,6 @@ In cloud mode, embeddings must match the configured Vertex AI Vector Search inde
 from functools import lru_cache
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_google_vertexai import VertexAIEmbeddings
 
 try:
     from backend.config.settings import settings
@@ -15,7 +14,7 @@ except ImportError:  # pragma: no cover - supports running with `--app-dir backe
 
 
 @lru_cache(maxsize=1)
-def get_embeddings() -> GoogleGenerativeAIEmbeddings | VertexAIEmbeddings:
+def get_embeddings() -> GoogleGenerativeAIEmbeddings:
     if settings.app_mode == "local":
         if not settings.GOOGLE_API_KEY:
             raise ValueError(
@@ -27,4 +26,9 @@ def get_embeddings() -> GoogleGenerativeAIEmbeddings | VertexAIEmbeddings:
             google_api_key=settings.GOOGLE_API_KEY,
         )
 
-    return VertexAIEmbeddings(model_name=settings.embedding_model_name)
+    return GoogleGenerativeAIEmbeddings(
+        model=settings.embedding_model_name,
+        vertexai=True,
+        project=settings.GCP_PROJECT,
+        location=settings.GCP_REGION,
+    )
