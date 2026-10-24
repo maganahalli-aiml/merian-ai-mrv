@@ -5,7 +5,7 @@
     /api/agent/audit   - run the multi-agent procurement audit        (agent/agents.py)
     /api/rag/ask       - ask a question about the ingested documents  (rag/retrieval.py)
     /api/rag/upload    - upload PDFs and index them                   (rag/data_ingestion.py)
-    /api/rag/ingest-gcs- index every PDF already sitting in the bucket
+    /api/rag/ingest-gcs- index every PDF already in cloud document storage
 """
 import os
 import platform
@@ -29,14 +29,14 @@ try:
     from backend.api.schemas import AuditRequest, AuditResponse, QueryRequest, QueryResponse
     from backend.config.settings import settings
     from backend.logger import GLOBAL_LOGGER as log
-    from backend.rag.data_ingestion import ingest_data_from_gcs, ingest_pdf
+    from backend.rag.data_ingestion import ingest_pdf, ingest_stored_pdfs
     from backend.rag.retrieval import ask_question
 except ImportError:  # pragma: no cover - supports running with `--app-dir backend`
     from agent.agents import ProcurementSupervisor
     from api.schemas import AuditRequest, AuditResponse, QueryRequest, QueryResponse
     from config.settings import settings
     from logger import GLOBAL_LOGGER as log
-    from rag.data_ingestion import ingest_data_from_gcs, ingest_pdf
+    from rag.data_ingestion import ingest_pdf, ingest_stored_pdfs
     from rag.retrieval import ask_question
 
 health_router = APIRouter(prefix="/api", tags=["Health"])
@@ -350,7 +350,7 @@ def trigger_gcs_ingestion():
             detail="GCS ingestion is only available when APP_MODE=cloud. Upload PDF files directly in local mode.",
         )
     try:
-        totals = ingest_data_from_gcs()
+        totals = ingest_stored_pdfs()
         return {"status": "GCS ingestion complete", **totals}
     except Exception as e:
         log.error("GCS ingestion failed", traceback=traceback.format_exc())

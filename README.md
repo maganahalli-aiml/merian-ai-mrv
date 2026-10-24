@@ -164,7 +164,7 @@ cp .env.example .env                 # Windows: copy .env.example .env
 #    open .env and set:  GOOGLE_API_KEY=your-key
 
 # 4. Start the backend
-uvicorn backend.api.main:app --reload --port 8080
+uvicorn api.main:app --app-dir backend --reload --port 8080
 ```
 
 Now open **http://localhost:8080/docs**. This page is made automatically by FastAPI and lets you try every address:

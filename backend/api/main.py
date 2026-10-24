@@ -2,7 +2,7 @@
 FastAPI backend — Procurement Audit & RAG Document Intelligence
 ================================================================
 Run locally (from the project root):
-    uvicorn backend.api.main:app --reload --port 8080
+    uvicorn api.main:app --app-dir backend --reload --port 8080
 Interactive API docs: http://localhost:8080/docs
 
 Exposes REST endpoints for:
@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover - supports running with `--app-dir backe
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_: FastAPI):
     yield  # the app runs here
     # Shutdown: flush logs to GCS (critical on Cloud Run, whose disk disappears)
     _LOGGER_INSTANCE.flush_to_gcs()
