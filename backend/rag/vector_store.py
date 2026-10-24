@@ -8,6 +8,11 @@ from langchain_core.vectorstores import VectorStore
 from langchain_google_vertexai import VectorSearchVectorStore
 
 try:
+    from backend.exceptions import ConfigurationError
+except ImportError:  # pragma: no cover - supports running with `--app-dir backend`
+    from exceptions import ConfigurationError
+
+try:
     from backend.config.settings import settings
     from backend.rag.embeddings import get_embeddings
 except ImportError:  # pragma: no cover - supports running with `--app-dir backend`
@@ -25,6 +30,13 @@ def get_vector_store() -> VectorStore:
             collection_name="meridian_documents",
             persist_directory=str(persist_directory),
             embedding_function=get_embeddings(),
+        )
+
+    missing_settings = settings.missing_cloud_settings()
+    if missing_settings:
+        raise ConfigurationError(
+            "APP_MODE=cloud is missing required settings: "
+            + ", ".join(missing_settings)
         )
 
     aiplatform.init(project=settings.GCP_PROJECT, location=settings.GCP_REGION)

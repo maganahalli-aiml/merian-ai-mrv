@@ -9,6 +9,11 @@ from functools import lru_cache
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 try:
+    from backend.exceptions import ConfigurationError
+except ImportError:  # pragma: no cover - supports running with `--app-dir backend`
+    from exceptions import ConfigurationError
+
+try:
     from backend.config.settings import settings
 except ImportError:  # pragma: no cover - supports running with `--app-dir backend`
     from config.settings import settings
@@ -17,6 +22,10 @@ except ImportError:  # pragma: no cover - supports running with `--app-dir backe
 @lru_cache(maxsize=1)
 def get_llm() -> ChatGoogleGenerativeAI:
     """Create the chat model on first use (not at import time) and reuse it afterwards."""
+    if not settings.GOOGLE_API_KEY:
+        raise ConfigurationError(
+            "GOOGLE_API_KEY is required for Gemini. Add it to your .env file."
+        )
     return ChatGoogleGenerativeAI(
         model=settings.llm_model_name,
         google_api_key=settings.GOOGLE_API_KEY,

@@ -28,6 +28,7 @@ try:
     from backend.agent.agents import ProcurementSupervisor
     from backend.api.schemas import AuditRequest, AuditResponse, QueryRequest, QueryResponse
     from backend.config.settings import settings
+    from backend.exceptions import ConfigurationError
     from backend.logger import GLOBAL_LOGGER as log
     from backend.rag.data_ingestion import ingest_pdf, ingest_stored_pdfs
     from backend.rag.retrieval import ask_question
@@ -35,6 +36,7 @@ except ImportError:  # pragma: no cover - supports running with `--app-dir backe
     from agent.agents import ProcurementSupervisor
     from api.schemas import AuditRequest, AuditResponse, QueryRequest, QueryResponse
     from config.settings import settings
+    from exceptions import ConfigurationError
     from logger import GLOBAL_LOGGER as log
     from rag.data_ingestion import ingest_pdf, ingest_stored_pdfs
     from rag.retrieval import ask_question
@@ -192,6 +194,9 @@ def run_audit(payload: AuditRequest):
     try:
         result = get_supervisor().run_audit(payload.request_text)
         return AuditResponse(**result)
+    except ConfigurationError as e:
+        log.error("Audit configuration error", error=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         log.error("Audit failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -206,6 +211,9 @@ def rag_query(payload: QueryRequest):
     """Query the RAG pipeline using the configured vector store and Gemini."""
     try:
         return QueryResponse(answer=ask_question(payload.query, payload.retriever_type))
+    except ConfigurationError as e:
+        log.error("RAG configuration error", error=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         log.error("RAG query failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
