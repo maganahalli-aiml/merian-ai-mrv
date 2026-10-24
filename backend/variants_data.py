@@ -1,0 +1,26 @@
+"""The 22 sentences used by variants_lab.py: copied from the four sample PDFs (id, source file, sentence)."""
+
+SENTENCES = [
+    ("P1", "aldermoor_procurement_policy.pdf", "Vendors with a credit score of 75 or higher are low risk and receive standard Net-45 payment terms."),
+    ("P2", "aldermoor_procurement_policy.pdf", "Vendors scoring 50 to 74 are moderate risk and require a 25 to 50 percent deposit or a confirmed letter of credit."),
+    ("P3", "aldermoor_procurement_policy.pdf", "Vendors scoring below 50 are high risk and require full prepayment plus a bank guarantee, or must be rejected."),
+    ("P4", "aldermoor_procurement_policy.pdf", "Every new vendor must be screened against EU, US OFAC, UN and German export-control lists before a purchase order is released."),
+    ("P5", "aldermoor_procurement_policy.pdf", "A sanctions match means immediate rejection."),
+    ("P6", "aldermoor_procurement_policy.pdf", "Purchases above EUR 250,000 need Department Head sign-off."),
+    ("P7", "aldermoor_procurement_policy.pdf", "Purchases above EUR 1,000,000 need CFO and Management Board approval."),
+    ("A1", "aldermoor_accounting_policy_ifrs.pdf", "Assets with a useful life of more than one year and a cost above EUR 5,000 are capitalised as property, plant and equipment under IAS 16."),
+    ("A2", "aldermoor_accounting_policy_ifrs.pdf", "Filling line equipment is depreciated on a straight-line basis over 10 years."),
+    ("A3", "aldermoor_accounting_policy_ifrs.pdf", "Production robots and tooling are depreciated over 8 years."),
+    ("A4", "aldermoor_accounting_policy_ifrs.pdf", "IT hardware and servers are depreciated over 4 years."),
+    ("A5", "aldermoor_accounting_policy_ifrs.pdf", "Buildings are depreciated over 30 years."),
+    ("A6", "aldermoor_accounting_policy_ifrs.pdf", "Fixed assets use accounts 0xxx. Material costs use 5xxx. External services use 6xxx."),
+    ("R1", "aldermoor_annual_report_fy2024.pdf", "Total revenue in FY2024 was EUR 2.84 billion, up from EUR 2.61 billion in FY2023."),
+    ("R2", "aldermoor_annual_report_fy2024.pdf", "EBITDA in FY2024 was EUR 398 million."),
+    ("R3", "aldermoor_annual_report_fy2024.pdf", "The company operates 40 subsidiaries in 28 countries and employs about 14,500 people."),
+    ("R4", "aldermoor_annual_report_fy2024.pdf", "Aldermoor has manufacturing plants in Germany, Poland, China, Brazil and the United States."),
+    ("R5", "aldermoor_annual_report_fy2024.pdf", "About 22 percent of the manufacturing workforce is expected to retire within the next five years."),
+    ("T1", "eu_tariff_schedule_excerpt.pdf", "Programmable controllers and PLC control units imported from Japan into the European Union: the customs duty rate is 2.2 percent of the customs value."),
+    ("T2", "eu_tariff_schedule_excerpt.pdf", "Servo motors (heading 8501): 2.7 percent."),
+    ("T3", "eu_tariff_schedule_excerpt.pdf", "Germany charges import VAT of 19 percent on the customs value plus duty."),
+    ("T4", "eu_tariff_schedule_excerpt.pdf", "Intra-EU business-to-business supplies with a valid VAT ID are zero-rated under the reverse-charge mechanism."),
+]
