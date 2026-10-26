@@ -15,38 +15,62 @@ How the app is packed into a box and run on the internet.
 | **Dockerfile** | The recipe for packing | The packing list |
 | **Registry** | A warehouse for images | A storage shed |
 
-## 2. The Dockerfile in two stages
+## 2. The Dockerfile in three stages
 
 **Stage 1: build the website (Node.js).**
 ```dockerfile
-FROM node:20-alpine AS frontend-builder
+FROM node:24-alpine AS frontend-builder
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 ```
-Install the website's packages, then build the finished website into `frontend/dist`.
+Install the website's locked packages, then build the finished website into `frontend/dist`.
 
-**Stage 2: the app (Python).**
+**Stage 2: install Python packages.** Build tools are only used in this stage.
 ```dockerfile
 FROM python:3.12-slim AS backend-builder
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY backend/ ./backend/
-COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
+```
+
+**Stage 3: run the app (Python).**
+```dockerfile
+FROM python:3.12-slim AS runtime
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libstdc++6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --home-dir /home/app app \
+    && mkdir -p /app/logs /app/.meridian \
+    && chown -R app:app /app /home/app
+COPY --from=backend-builder /opt/venv /opt/venv
+COPY --from=frontend-builder --chown=app:app /app/frontend/dist /app/frontend/dist
+COPY --chown=app:app backend/ ./backend/
+USER app
 EXPOSE 8080
-CMD uvicorn api.main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8080}
+CMD ["sh", "-c", "exec uvicorn api.main:app --app-dir backend --host 0.0.0.0 --port \"${PORT:-8080}\""]
 ```
 
 | Line | Meaning |
 |---|---|
 | `COPY requirements.txt` + `pip install` **before** copying the code | Docker remembers finished steps. Installing packages is slow and rarely changes, so it goes first and is reused |
-| `COPY --from=frontend-builder …` | Takes only the finished website from stage 1. Node.js itself stays out of the final image, which keeps it small |
+| `COPY --from=frontend-builder …` | Takes only the finished website from stage 1. Node.js itself stays out of the final image |
+| Separate backend builder and runtime | Compiler/build tools are not included in the running image |
+| `USER app` | The service runs as a non-root user; its log and local-data folders are writable |
 | `--host 0.0.0.0` | Listen on all network connections inside the box |
 | `--port ${PORT:-8080}` | Cloud Run says which port via `PORT`; the default is 8080 |
 
@@ -54,14 +78,15 @@ The backend finds `frontend/dist` and serves it, so **one box = the whole app**.
 
 ## 3. What is *not* in the box
 
-`.dockerignore` keeps out `.env`, `credentials/`, `.git`, logs and `node_modules`. Secrets are given to the container when it runs; they are never packed inside.
+`.dockerignore` keeps out `.env` files, `credentials/`, `.git`, logs, local data, caches and `node_modules`. Secrets are given to the container when it runs; they are never packed inside.
 
-Run it yourself:
+Run it yourself from the project folder. Create `.env` from `.env.example` first and add your settings. The script builds the image, then starts the container with the persistent `meridian-data` volume:
 
 ```bash
-docker build -t meridian-ai .
-docker run -p 8080:8080 --env-file .env meridian-ai
+./start-docker.sh
 ```
+
+Open `http://localhost:8080`. Stop it with `Ctrl+C` in the terminal running the container, or run `./stop-docker.sh` from another terminal.
 
 For document Q&A the container also needs Google Cloud sign-in:
 
