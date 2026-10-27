@@ -84,50 +84,56 @@ gcloud config set project YOUR_PROJECT_ID
 
 ### Step 6 · Create the robot account
 
-A **service account** is an account for a program instead of a person. Run these (replace `YOUR_PROJECT_ID`):
+A **service account** is an account for a program instead of a person. GitHub will use **Workload Identity Federation** to get short-lived credentials for it. This avoids creating a downloadable service-account key, which many Google Cloud projects prohibit.
 
-```bash
-export PROJECT_ID="YOUR_PROJECT_ID"        # Windows PowerShell: $env:PROJECT_ID="YOUR_PROJECT_ID"
+The following commands are for **Windows Command Prompt**. Replace the project ID if needed. The GitHub repository and `main` branch are intentionally restricted in the provider; update both occurrences if you deploy from a different repository or branch.
 
-gcloud iam service-accounts create github-deployer \
-  --display-name="GitHub Actions Deployer" --project=$PROJECT_ID
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:github-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/editor"
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:github-deployer@${PROJECT_ID}.iam.gserviceaccount.com" \
-  --role="roles/resourcemanager.projectIamAdmin"
-
-gcloud iam service-accounts keys create github-deployer-key.json \
-  --iam-account=github-deployer@${PROJECT_ID}.iam.gserviceaccount.com
+```cmd
+set "PROJECT_ID=YOUR_PROJECT_ID"
+gcloud projects describe %PROJECT_ID% --format="value(projectNumber)"
+gcloud services enable iam.googleapis.com iamcredentials.googleapis.com --project=%PROJECT_ID%
 ```
 
-The last command makes a file, `github-deployer-key.json`. It is a **password for the robot**.
+Copy the printed project number, then set it and create the identity pool and GitHub OIDC provider:
 
-> **Keep it safe.**
-> - Never commit it, email it, or paste it anywhere except the GitHub secret in step 8. Delete the file afterwards.
-> - These permissions are broad on purpose, to keep the setup simple. A real company would give the robot only what it needs.
-> - If it ever leaks: Console → IAM & Admin → Service accounts → `github-deployer` → Keys → delete it.
+```cmd
+set "PROJECT_NUMBER=YOUR_PROJECT_NUMBER"
+gcloud iam workload-identity-pools create github-pool --project=%PROJECT_ID% --location=global --display-name="GitHub Actions"
+gcloud iam workload-identity-pools providers create-oidc github-provider --project=%PROJECT_ID% --location=global --workload-identity-pool=github-pool --display-name="GitHub provider" --issuer-uri="https://token.actions.githubusercontent.com" --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" --attribute-condition="assertion.repository == 'maganahalli-aiml/merian-ai-mrv' && assertion.ref == 'refs/heads/main'"
+```
+
+Create the service account, grant it the deployment permissions, and allow only this repository's `main` branch to impersonate it:
+
+```cmd
+set "DEPLOYER_SA=github-deployer@%PROJECT_ID%.iam.gserviceaccount.com"
+gcloud iam service-accounts create github-deployer --display-name="GitHub Actions Deployer" --project=%PROJECT_ID%
+gcloud projects add-iam-policy-binding %PROJECT_ID% --member="serviceAccount:%DEPLOYER_SA%" --role="roles/editor"
+gcloud projects add-iam-policy-binding %PROJECT_ID% --member="serviceAccount:%DEPLOYER_SA%" --role="roles/resourcemanager.projectIamAdmin"
+gcloud iam service-accounts add-iam-policy-binding %DEPLOYER_SA% --project=%PROJECT_ID% --role="roles/iam.workloadIdentityUser" --member="principalSet://iam.googleapis.com/projects/%PROJECT_NUMBER%/locations/global/workloadIdentityPools/github-pool/attribute.repository/maganahalli-aiml/merian-ai-mrv"
+```
+
+The deployment roles above are broad, to keep the setup simple. A production setup should grant only the permissions it needs and review access regularly.
 
 ### Step 7 · Put the code on your own GitHub
 
 The robot runs from **your** GitHub copy. On this repository's page click **Fork**. Then open the **Actions** tab of your fork and enable workflows if GitHub asks.
 
-### Step 8 · Give GitHub three secrets
+### Step 8 · Give GitHub four secrets
 
 In your fork: **Settings → Secrets and variables → Actions → New repository secret**. Add:
 
 | Name | Value |
 |---|---|
 | `GCP_PROJECT_ID` | Your Project ID |
-| `GCP_CREDENTIALS_JSON` | The **whole contents** of `github-deployer-key.json` |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/YOUR_PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
+| `GCP_SERVICE_ACCOUNT` | `github-deployer@YOUR_PROJECT_ID.iam.gserviceaccount.com` |
 | `GOOGLE_API_KEY` | Your Gemini key |
+
+There is no JSON key to download or store in GitHub. The workflow requests a short-lived identity token from GitHub and exchanges it with Google Cloud.
 
 ### Step 9 · Run the workflow
 
-**Actions → Deploy to GCP Cloud Run → Run workflow.** (It also starts by itself whenever you push to `main`.)
+**Actions → Deploy to GCP Cloud Run → Run workflow**, selecting the `main` branch. (It also starts by itself whenever you push to `main`.)
 
 It does these jobs in order:
 
@@ -199,7 +205,13 @@ gcloud run services delete meridian-ai-cloud-run --region=us-central1
 gcloud projects delete YOUR_PROJECT_ID
 ```
 
-Also: delete the robot's key (step 6), delete `github-deployer-key.json` from your computer, and remove the three GitHub secrets.
+Also remove the four GitHub secrets. If you are keeping the project, remove the deployment identity and its broad permissions when you no longer need deployments:
+
+```cmd
+gcloud iam workload-identity-pools providers delete github-provider --project=%PROJECT_ID% --location=global --workload-identity-pool=github-pool
+gcloud iam workload-identity-pools delete github-pool --project=%PROJECT_ID% --location=global
+gcloud iam service-accounts delete github-deployer@%PROJECT_ID%.iam.gserviceaccount.com --project=%PROJECT_ID%
+```
 
 **Check:** next day, Billing → Reports should show the daily cost near zero.
 
@@ -212,7 +224,7 @@ Also: delete the robot's key (step 6), delete `github-deployer-key.json` from yo
 | `403` / "permission denied" from Storage or Vertex AI | Wrong account or key. Run `gcloud auth list`; for the app use `gcloud auth application-default login` |
 | "API has not been used… or it is disabled" | Wait a couple of minutes and retry; the workflow switches the services on |
 | "Billing account not enabled" | Link billing to the project (step 4) |
-| Workflow fails at sign-in | `GCP_CREDENTIALS_JSON` must be the entire file, including the `{ }` |
+| Workflow fails at sign-in | Check that `GCP_WORKLOAD_IDENTITY_PROVIDER` is the full provider resource name, `GCP_SERVICE_ACCOUNT` is the correct email, and the workflow is running from `main`. Confirm the service account's Workload Identity User binding matches this repository. |
 | App opens but answers fail | Open the Cloud Run **Logs**; check the Gemini key secret and the index IDs |
 | "model not found" | Set `VERTEX_LLM_MODEL_NAME` to a current model: https://ai.google.dev/gemini-api/docs/models |
 | First upload is slow or cold | Cloud Run wakes up from zero; the first request is slower |
