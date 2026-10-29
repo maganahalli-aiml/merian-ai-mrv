@@ -26,13 +26,19 @@ Because nothing external is created at start-up, the server starts even with an 
 | 1 | `DocumentUploadTab.tsx` | You choose a PDF and click upload |
 | 2 | `lib/api.ts` → `uploadDocument` | Sends it to `POST /api/rag/upload` |
 | 3 | `api/endpoints.py` → `upload_documents` | Non-PDFs are marked "skipped" |
-| 4 | same | Saves the file temporarily and copies it to your Cloud Storage bucket |
+| 4 | same | Saves the file temporarily and persists it in the configured storage (GCS in cloud mode) |
 | 5 | `rag/data_ingestion.py` → `ingest_pdf` | Reads the pages, marks each with its source |
 | 6 | `split_into_chunks` | Cuts the text into pieces (1000 characters, 100 overlap) |
 | 7 | `rag/vector_store.py` → `get_vector_store` | **First use:** connects to Vector Search |
 | 8 | `add_documents` | Turns each piece into 768 numbers and stores it |
 | 9 | `endpoints.py` | Replies `{filename, status, pages, chunks}` |
 | 10 | `logger` | Every step wrote one log line |
+
+The Stored documents list calls `GET /api/rag/uploads` on page load. In cloud mode,
+the backend lists PDF objects under the configured GCS bucket and prefix; the list
+does not depend on in-memory upload history, so it remains available across refreshes
+and Cloud Run instance restarts. If saving to GCS fails, the upload endpoint returns
+an error instead of reporting a successful upload that will disappear later.
 
 ## 3. You ask a question
 

@@ -256,7 +256,11 @@ async def upload_documents(files: list[UploadFile] = File(...)):
                     bucket.blob(gcs_path).upload_from_filename(local_path, content_type="application/pdf")
                     log.info("File saved to GCS", filename=filename, gcs_path=f"gs://{settings.GCS_BUCKET_NAME}/{gcs_path}")
                 except Exception as gcs_err:
-                    log.warning("Could not save to GCS", error=str(gcs_err))
+                    log.error("Could not save uploaded PDF to GCS", filename=filename, error=str(gcs_err))
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Could not save uploaded PDF to Cloud Storage: {gcs_err}",
+                    ) from gcs_err
 
             # ingest_pdf is slow and blocking, so run it in a worker thread to keep the server responsive
             source = (
@@ -288,6 +292,8 @@ async def upload_documents(files: list[UploadFile] = File(...)):
             results.append(document_details)
             if settings.app_mode == "local":
                 _save_local_upload_details(document_details)
+    except HTTPException:
+        raise
     except Exception as e:
         log.error("Upload failed", traceback=traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
@@ -300,7 +306,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
 
 @rag_router.get("/uploads")
 def list_uploads():
-    """Return locally persisted document details or cloud uploads from this session."""
+    """Return documents persisted locally or in the configured Cloud Storage bucket."""
     if settings.app_mode == "local":
         uploads_dir = Path(settings.local_data_dir).expanduser() / "uploads"
         metadata_path = Path(settings.local_data_dir).expanduser() / "uploads.json"
@@ -346,7 +352,35 @@ def list_uploads():
                 })
         return {"uploads": uploads}
 
-    return {"uploads": _upload_history}
+    try:
+        bucket = storage.Client(project=settings.GCP_PROJECT).bucket(settings.GCS_BUCKET_NAME)
+        uploads = []
+        for blob in bucket.list_blobs(prefix=settings.GCS_PREFIX):
+            if not blob.name.lower().endswith(".pdf"):
+                continue
+            timestamp = blob.time_created or blob.updated
+            filename = blob.name.removeprefix(settings.GCS_PREFIX)
+            uploads.append({
+                "filename": filename,
+                "status": "stored",
+                "pages": None,
+                "chunks": None,
+                "reason": None,
+                "size_bytes": blob.size or 0,
+                "uploaded_at": (
+                    timestamp.isoformat()
+                    if timestamp is not None
+                    else datetime.now(timezone.utc).isoformat()
+                ),
+            })
+        uploads.sort(key=lambda upload: upload["filename"].lower())
+        return {"uploads": uploads}
+    except Exception as error:
+        log.error("Could not list cloud uploads", error=str(error))
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not list stored documents from Cloud Storage: {error}",
+        ) from error
 
 
 @rag_router.post("/ingest-gcs")

@@ -14,7 +14,7 @@ import {
   Database,
   RefreshCw,
 } from "lucide-react";
-import { listUploads, uploadDocument, triggerGcsIngestion, type UploadedDocument } from "@/lib/api";
+import { getSystemStatus, listUploads, uploadDocument, triggerGcsIngestion, type UploadedDocument } from "@/lib/api";
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return bytes + " B";
@@ -45,6 +45,8 @@ export default function DocumentUploadTab() {
   const [storedDocuments, setStoredDocuments] = useState<UploadedDocument[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(true);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
+  const [storageTarget, setStorageTarget] = useState<string | null>(null);
+  const [storageConfigError, setStorageConfigError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refreshStoredDocuments = useCallback(async () => {
@@ -63,6 +65,21 @@ export default function DocumentUploadTab() {
 
   useEffect(() => {
     void refreshStoredDocuments();
+    void getSystemStatus()
+      .then((status) => {
+        const bucket = status.storage?.gcs_bucket;
+        const prefix = status.storage?.gcs_prefix ?? "";
+        const localUploadDir = status.storage?.local_data_dir
+          ? `${status.storage.local_data_dir}/uploads`
+          : null;
+        setStorageTarget(
+          bucket ? `gs://${bucket}/${prefix}` : localUploadDir ?? "Not configured",
+        );
+        setStorageConfigError(null);
+      })
+      .catch((err: unknown) => {
+        setStorageConfigError(err instanceof Error ? err.message : "Unknown error");
+      });
   }, [refreshStoredDocuments]);
 
   const isAnyUploading = stagedFiles.some((f) => f.status.state === "uploading");
@@ -324,7 +341,7 @@ export default function DocumentUploadTab() {
                     Stored documents
                   </h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    PDFs saved in local storage, including documents from previous sessions.
+                    PDFs saved in configured storage, including documents from previous sessions.
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
@@ -418,7 +435,14 @@ export default function DocumentUploadTab() {
                 <div className="p-6 rounded-xl bg-muted/40 border border-border/50 mb-8 divide-y divide-border/50">
                   <div className="pb-4">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Target Directory</p>
-                    <p className="text-sm font-mono text-card-foreground">gs://meridian-ai-platform-vector-staging/uploads/</p>
+                    <p className="text-sm font-mono text-card-foreground">
+                      {storageTarget ?? "Loading storage configuration…"}
+                    </p>
+                    {storageConfigError && (
+                      <p role="alert" className="mt-1 text-xs text-destructive">
+                        Could not load storage configuration: {storageConfigError}
+                      </p>
+                    )}
                   </div>
                   <div className="pt-4 pb-4">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Processing Mode</p>
