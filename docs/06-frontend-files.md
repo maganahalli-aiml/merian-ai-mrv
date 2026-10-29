@@ -13,7 +13,7 @@ You do **not** need to know React to understand this project. What matters is ho
 Every request to the backend is made here. One small helper and one function per address:
 
 ```ts
-const BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:8080" : "");
+const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, options);
@@ -27,7 +27,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 Step by step:
 
-1. `BASE_URL`: while you develop (`npm run dev`) requests go to `http://localhost:8080` (your backend). On the live site it is empty, so requests go to the same address that served the page.
+1. `BASE_URL`: it is empty by default, so requests use the same origin as the page. During development, Vite proxies `/api` requests to the backend at `http://127.0.0.1:8080`; in production the same-origin API is served by FastAPI.
 2. `request()` sends the request. If the reply is an error, it reads the backend's `detail` message and shows **that**, so you see the real reason.
 3. Then one function per backend address:
 

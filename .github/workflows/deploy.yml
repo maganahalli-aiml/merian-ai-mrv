@@ -61,6 +61,7 @@ jobs:
             cloudbuild.googleapis.com \
             cloudresourcemanager.googleapis.com \
             iam.googleapis.com \
+            identitytoolkit.googleapis.com \
             generativelanguage.googleapis.com
             
           echo "Waiting 90 seconds for API enablement to fully propagate across GCP..."
@@ -253,7 +254,22 @@ jobs:
 
       # --- Phase 5: Build & Deploy Application ---
       - name: Build and Push Docker Image
+        env:
+          FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_WEB_PROJECT_ID: ${{ secrets.FIREBASE_WEB_PROJECT_ID }}
+          FIREBASE_WEB_APP_ID: ${{ secrets.FIREBASE_WEB_APP_ID }}
         run: |
+          if [ -z "$FIREBASE_WEB_API_KEY" ] || [ -z "$FIREBASE_AUTH_DOMAIN" ] || \
+             [ -z "$FIREBASE_WEB_PROJECT_ID" ] || [ -z "$FIREBASE_WEB_APP_ID" ]; then
+            echo "Configure FIREBASE_WEB_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_WEB_PROJECT_ID, and FIREBASE_WEB_APP_ID GitHub secrets."
+            exit 1
+          fi
+          if [ "$FIREBASE_WEB_PROJECT_ID" != "$PROJECT_ID" ]; then
+            echo "FIREBASE_WEB_PROJECT_ID must match the Google Cloud project used by this deployment."
+            exit 1
+          fi
+
           # Cloud Build runs as the default compute service account, which newer projects no longer
           # make Editor automatically. Give it what a build needs: read the uploaded source, push the image, write logs.
           echo "Granting Cloud Build permissions to the build service account..."
@@ -265,7 +281,9 @@ jobs:
           echo "Waiting 60 seconds for the IAM change to propagate..."
           sleep 60
 
-          gcloud builds submit --tag ${{ env.IMAGE_NAME }} .
+          gcloud builds submit --config=cloudbuild.yaml \
+            --substitutions="_IMAGE=${{ env.IMAGE_NAME }},_VITE_FIREBASE_API_KEY=${FIREBASE_WEB_API_KEY},_VITE_FIREBASE_AUTH_DOMAIN=${FIREBASE_AUTH_DOMAIN},_VITE_FIREBASE_PROJECT_ID=${FIREBASE_WEB_PROJECT_ID},_VITE_FIREBASE_APP_ID=${FIREBASE_WEB_APP_ID}" \
+            .
 
       - name: Grant Cloud Run Runtime Permissions
         run: |
@@ -283,8 +301,22 @@ jobs:
             --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
             --role="roles/storage.objectAdmin" --condition=None >/dev/null
 
+          echo "Granting Firebase Authentication read access for ID-token revocation checks..."
+          gcloud projects add-iam-policy-binding ${{ env.PROJECT_ID }} \
+            --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+            --role="roles/firebaseauth.viewer" --condition=None >/dev/null
+
       - name: Deploy to Cloud Run
+        env:
+          ALLOWED_USER_EMAILS: ${{ secrets.ALLOWED_USER_EMAILS }}
+          DOCUMENT_MANAGER_EMAILS: ${{ secrets.DOCUMENT_MANAGER_EMAILS }}
+          CORS_ALLOWED_ORIGINS: ${{ vars.CORS_ALLOWED_ORIGINS }}
         run: |
+          if [ -z "$ALLOWED_USER_EMAILS" ] || [ -z "$DOCUMENT_MANAGER_EMAILS" ]; then
+            echo "Configure ALLOWED_USER_EMAILS and DOCUMENT_MANAGER_EMAILS GitHub secrets before deploying."
+            exit 1
+          fi
+
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image ${{ env.IMAGE_NAME }} \
             --region ${{ env.REGION }} \
@@ -292,7 +324,7 @@ jobs:
             --allow-unauthenticated \
             --port 8080 \
             --max-instances 3 \
-            --set-env-vars="APP_MODE=cloud,ENVIRONMENT=production,GCP_PROJECT_ID=${{ env.PROJECT_ID }},GCP_REGION=${{ env.REGION }},GCS_BUCKET_NAME=${{ env.PROJECT_ID }}-vector-staging,GCS_PREFIX=uploads/,VERTEX_LLM_MODEL_NAME=gemini-3.8-flash,VERTEX_EMBEDDING_MODEL_NAME=text-embedding-005,VECTOR_SEARCH_INDEX_ID=${{ env.INDEX_ID }},VECTOR_SEARCH_INDEX_ENDPOINT_ID=${{ env.ENDPOINT_ID }}" \
+            --set-env-vars="^;^APP_MODE=cloud;ENVIRONMENT=production;GCP_PROJECT_ID=${{ env.PROJECT_ID }};GCP_REGION=${{ env.REGION }};GCS_BUCKET_NAME=${{ env.PROJECT_ID }}-vector-staging;GCS_PREFIX=uploads/;VERTEX_LLM_MODEL_NAME=gemini-3.8-flash;VERTEX_EMBEDDING_MODEL_NAME=text-embedding-005;VECTOR_SEARCH_INDEX_ID=${{ env.INDEX_ID }};VECTOR_SEARCH_INDEX_ENDPOINT_ID=${{ env.ENDPOINT_ID }};FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }};FIREBASE_CHECK_REVOKED=true;ALLOWED_USER_EMAILS=${ALLOWED_USER_EMAILS};DOCUMENT_MANAGER_EMAILS=${DOCUMENT_MANAGER_EMAILS};CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS};UPLOAD_MAX_FILE_BYTES=20971520;UPLOAD_MAX_REQUEST_BYTES=26214400;UPLOAD_MAX_FILES=5;UPLOAD_MAX_PDF_PAGES=500" \
             --update-secrets="GOOGLE_API_KEY=GOOGLE_API_KEY:latest"
 
       - name: Allow Public Access to Cloud Run

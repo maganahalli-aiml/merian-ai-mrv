@@ -1,19 +1,19 @@
 """Smoke tests: the API starts and its routes work WITHOUT Google Cloud (everything external is faked)."""
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
+from pypdf import PdfWriter
 
-try:
-    from backend.api import endpoints
-    from backend.api.main import app
-except ImportError:
-    from api import endpoints
-    from api.main import app
+from backend.api.auth import CurrentUser, get_current_user
+from backend.api import endpoints
+from backend.api.main import app
 
 client = TestClient(app)
 
 
 def test_health():
-    assert client.get("/api/health").json() == {"status": "ok"}
+    response = client.get("/api/health")
+    assert response.json() == {"status": "ok"}
+    assert response.headers["x-request-id"]
 
 
 def test_status_reports_local_mode_without_calling_gcp():
@@ -21,6 +21,46 @@ def test_status_reports_local_mode_without_calling_gcp():
     assert body["backend"]["app_mode"] == "local"
     assert body["backend"]["vector_store"] == "Chroma"
     assert body["models"]["embedding"] == "gemini-embedding-001"
+
+
+def test_auth_me_returns_server_authorized_profile():
+    response = client.get("/api/auth/me")
+    assert response.status_code == 200
+    assert response.json() == {
+        "uid": "test-user",
+        "email": "manager@example.com",
+        "can_manage_documents": True,
+    }
+
+
+def test_protected_api_rejects_missing_bearer_token(monkeypatch):
+    app.dependency_overrides.pop(get_current_user, None)
+    monkeypatch.setattr(endpoints.settings, "firebase_project_id", "meridian-test")
+    monkeypatch.setattr(
+        endpoints.settings,
+        "allowed_user_emails_raw",
+        "reader@example.com,manager@example.com",
+    )
+    monkeypatch.setattr(endpoints.settings, "document_manager_emails_raw", "manager@example.com")
+    response = client.get("/api/rag/uploads")
+    assert response.status_code == 401
+
+
+def test_document_manager_routes_reject_regular_users():
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        uid="reader-user",
+        email="reader@example.com",
+        can_manage_documents=False,
+    )
+    try:
+        response = client.post(
+            "/api/rag/upload",
+            files={"files": ("policy.txt", b"ignore", "text/plain")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Document manager permission is required."
 
 
 def test_unknown_api_route_is_404():
@@ -102,6 +142,13 @@ def test_cloud_upload_listing_reads_persisted_gcs_pdfs(monkeypatch):
 
 
 def test_cloud_upload_fails_if_gcs_persistence_fails(monkeypatch):
+    import io
+
+    pdf = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.write(pdf)
+
     class FakeBlob:
         def upload_from_filename(self, filename, content_type):
             raise RuntimeError("bucket access denied")
@@ -130,11 +177,80 @@ def test_cloud_upload_fails_if_gcs_persistence_fails(monkeypatch):
 
     response = client.post(
         "/api/rag/upload",
-        files={"files": ("policy.pdf", b"%PDF-1.4", "application/pdf")},
+        files={"files": ("policy.pdf", pdf.getvalue(), "application/pdf")},
     )
 
     assert response.status_code == 502
-    assert "Could not save uploaded PDF to Cloud Storage" in response.json()["detail"]
+    assert "Could not save the uploaded PDF to Cloud Storage" in response.json()["detail"]
+    assert "bucket access denied" not in response.json()["detail"]
+
+
+def test_upload_rejects_files_over_configured_limit(monkeypatch):
+    monkeypatch.setattr(endpoints.settings, "upload_max_file_bytes", 4)
+    response = client.post(
+        "/api/rag/upload",
+        files={"files": ("policy.pdf", b"%PDF-1.4", "application/pdf")},
+    )
+    assert response.status_code == 413
+
+
+def test_upload_rejects_more_than_configured_file_count(monkeypatch):
+    monkeypatch.setattr(endpoints.settings, "upload_max_files", 1)
+    response = client.post(
+        "/api/rag/upload",
+        files=[
+            ("files", ("first.txt", b"first", "text/plain")),
+            ("files", ("second.txt", b"second", "text/plain")),
+        ],
+    )
+    assert response.status_code == 413
+
+
+def test_upload_rejects_pdf_over_configured_page_limit(monkeypatch):
+    import io
+
+    pdf = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_blank_page(width=72, height=72)
+    writer.write(pdf)
+    monkeypatch.setattr(endpoints.settings, "upload_max_pdf_pages", 1)
+    response = client.post(
+        "/api/rag/upload",
+        files={"files": ("large.pdf", pdf.getvalue(), "application/pdf")},
+    )
+    assert response.status_code == 413
+
+
+def test_upload_rejects_requests_over_total_size_limit(monkeypatch):
+    monkeypatch.setattr(endpoints.settings, "upload_max_request_bytes", 8)
+    response = client.post(
+        "/api/rag/upload",
+        content=b"x" * 10,
+        headers={"content-type": "multipart/form-data; boundary=unused"},
+    )
+    assert response.status_code == 413
+    assert response.headers["x-request-id"]
+
+
+def test_cors_does_not_allow_unconfigured_origins():
+    response = client.options(
+        "/api/rag/ask",
+        headers={
+            "Origin": "https://unapproved.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_upload_rejects_invalid_pdf_content():
+    response = client.post(
+        "/api/rag/upload",
+        files={"files": ("not-a-pdf.pdf", b"this is not a PDF", "application/pdf")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "The uploaded file is not a valid PDF."
 
 
 def test_chunking_splits_long_text_and_keeps_metadata():

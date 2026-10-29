@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.135.1",
+    "firebase-admin==7.1.0",
     "google-cloud-aiplatform==1.141.0",
     "google-cloud-storage==3.9.0",
     "httpx==0.28.1",

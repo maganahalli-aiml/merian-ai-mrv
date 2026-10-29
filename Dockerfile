@@ -1,11 +1,20 @@
 FROM node:24-alpine AS frontend-builder
 WORKDIR /app/frontend
 
+ARG VITE_FIREBASE_API_KEY
+ARG VITE_FIREBASE_AUTH_DOMAIN
+ARG VITE_FIREBASE_PROJECT_ID
+ARG VITE_FIREBASE_APP_ID
+
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
-RUN npm run build
+RUN VITE_FIREBASE_API_KEY="$VITE_FIREBASE_API_KEY" \
+    VITE_FIREBASE_AUTH_DOMAIN="$VITE_FIREBASE_AUTH_DOMAIN" \
+    VITE_FIREBASE_PROJECT_ID="$VITE_FIREBASE_PROJECT_ID" \
+    VITE_FIREBASE_APP_ID="$VITE_FIREBASE_APP_ID" \
+    npm run build
 
 
 FROM python:3.12-slim AS backend-builder

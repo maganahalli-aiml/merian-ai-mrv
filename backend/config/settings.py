@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     gcp_service_account_path: str = Field("", validation_alias="GCP_SERVICE_ACCOUNT_PATH")
     vector_search_index_id: str = Field("", validation_alias="VECTOR_SEARCH_INDEX_ID")
     vector_search_index_endpoint_id: str = Field("", validation_alias="VECTOR_SEARCH_INDEX_ENDPOINT_ID")
+    firebase_project_id: str = Field("", validation_alias="FIREBASE_PROJECT_ID")
+    firebase_check_revoked: bool = Field(False, validation_alias="FIREBASE_CHECK_REVOKED")
+    allowed_user_emails_raw: str = Field("", validation_alias="ALLOWED_USER_EMAILS")
+    document_manager_emails_raw: str = Field("", validation_alias="DOCUMENT_MANAGER_EMAILS")
+    cors_allowed_origins_raw: str = Field("", validation_alias="CORS_ALLOWED_ORIGINS")
+
+    # Upload limits apply before the expensive PDF parsing and embedding steps.
+    upload_max_file_bytes: int = Field(20 * 1024 * 1024, gt=0, validation_alias="UPLOAD_MAX_FILE_BYTES")
+    upload_max_request_bytes: int = Field(25 * 1024 * 1024, gt=0, validation_alias="UPLOAD_MAX_REQUEST_BYTES")
+    upload_max_files: int = Field(5, gt=0, validation_alias="UPLOAD_MAX_FILES")
+    upload_max_pdf_pages: int = Field(500, gt=0, validation_alias="UPLOAD_MAX_PDF_PAGES")
 
     # --- Agent middleware limits ---
     agent_max_model_calls: int = Field(8, validation_alias="AGENT_MAX_MODEL_CALLS")
@@ -92,6 +103,22 @@ class Settings(BaseSettings):
     @property
     def local_upload_dir(self) -> str:
         return os.path.join(self.local_data_dir, "uploads")
+
+    @staticmethod
+    def _email_set(value: str) -> frozenset[str]:
+        return frozenset(email.strip().casefold() for email in value.split(",") if email.strip())
+
+    @property
+    def allowed_user_emails(self) -> frozenset[str]:
+        return self._email_set(self.allowed_user_emails_raw)
+
+    @property
+    def document_manager_emails(self) -> frozenset[str]:
+        return self._email_set(self.document_manager_emails_raw)
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins_raw.split(",") if origin.strip()]
 
     def missing_cloud_settings(self) -> list[str]:
         """Names of cloud settings that are still empty (used for clear error messages)."""

@@ -19,3 +19,5 @@ logs/
 **/logs/
 *.log
 .pytest_cache/
+
+frontend/.env.local

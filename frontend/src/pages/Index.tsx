@@ -4,6 +4,7 @@ import DocumentUploadTab from "@/components/DocumentUploadTab";
 import RagQATab from "@/components/RagQATab";
 import AuditTab from "@/components/AuditTab";
 import SystemStatusTab from "@/components/SystemStatusTab";
+import { useAuth } from "@/auth/AuthContext";
 
 const TABS = [
   
@@ -17,7 +18,13 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 const Index = () => {
-  const [activeTab, setActiveTab] = useState<TabId>("upload");
+  const { profile, signOut } = useAuth();
+  const [activeTab, setActiveTab] = useState<TabId>(
+    profile?.can_manage_documents ? "upload" : "qa",
+  );
+  const visibleTabs = TABS.filter(
+    (tab) => tab.id !== "upload" || profile?.can_manage_documents,
+  );
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -47,7 +54,7 @@ const Index = () => {
 
         {/* Nav */}
         <nav className="flex-1 px-3 space-y-0.5">
-          {TABS.map((tab) => {
+          {visibleTabs.map((tab) => {
             const isActive = activeTab === tab.id;
             const Icon = tab.icon;
             return (
@@ -74,8 +81,20 @@ const Index = () => {
         </nav>
 
         {/* Footer */}
-        <div className="p-4 border-t border-border/50 mx-3 mb-2">
-          <p className="text-[10px] text-muted-foreground/50 text-center tracking-wide">Aldermoor Industries · Hamburg (fictional demo company)</p>
+        <div className="mx-3 mb-2 border-t border-border/50 p-4">
+          <p className="truncate text-center text-xs text-muted-foreground" title={profile?.email}>
+            {profile?.email}
+          </p>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="mt-3 w-full rounded-md px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            Sign out
+          </button>
+          <p className="mt-3 text-center text-[10px] tracking-wide text-muted-foreground/50">
+            Aldermoor Industries · Hamburg (fictional demo company)
+          </p>
         </div>
       </aside>
 

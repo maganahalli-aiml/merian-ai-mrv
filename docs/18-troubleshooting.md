@@ -17,15 +17,15 @@ Find the part that is failing. Each entry: **what you see → why → what to do
 | `ModuleNotFoundError: No module named 'api'` | Started from the wrong folder | Run from the main folder: `uvicorn api.main:app --app-dir backend --reload --port 8080` |
 | `ModuleNotFoundError` for another package | Environment not active, or packages not installed | `source .venv/bin/activate` then `pip install -r requirements.txt` |
 | Settings look empty at `/api/status` | `.env` is read from the folder you start in | Start from the main folder |
-| `Address already in use` | Port 8080 is taken | Stop the other program, or use `--port 8081` (and set `VITE_API_URL=http://localhost:8081` for the page) |
+| `Address already in use` | Port 8080 is taken | Stop the other program, or run the backend on another port and update the `/api` proxy target in `frontend/vite.config.ts` |
 | `422 Unprocessable Entity` | The request body doesn't match the form | Compare with `/docs`; the reply names the missing field |
 
 ## The web page
 
 | You see | Why | Do this |
 |---|---|---|
-| Browser says "blocked by CORS policy" | The backend isn't reachable | Start the backend on port 8080 |
-| Page loads but every action fails | Backend not running or wrong address | Check `http://localhost:8080/api/health` |
+| Browser says "blocked by CORS policy" or reports a connection reset | The backend isn't reachable from the Vite proxy | Start the backend on port 8080, then check `http://localhost:3000/api/health` |
+| Page loads but every action fails | Backend not running or wrong address | Check `http://localhost:8080/api/health` from the backend environment and `http://localhost:3000/api/health` through Vite |
 | Blank page on the Docker address | The website wasn't built into the image | Rebuild the image |
 | Audit progress steps move but nothing arrives | The steps run on timers. The real answer comes at the end | Wait; read the terminal for errors |
 

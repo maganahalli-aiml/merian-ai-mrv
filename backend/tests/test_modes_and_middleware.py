@@ -10,10 +10,10 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
-from agent.middleware import build_agent_middleware
-from api.main import app
-from config.settings import Settings, settings
-from exceptions import ConfigurationError
+from backend.agent.middleware import build_agent_middleware
+from backend.api.main import app
+from backend.config.settings import Settings, settings
+from backend.exceptions import ConfigurationError
 from rag import retrieval, vector_store
 from rag.data_ingestion import ingest_pdf, ingest_stored_pdfs
 
@@ -60,7 +60,7 @@ def test_missing_api_key_gives_503_not_500(monkeypatch):
     try:
         res = client.post("/api/rag/ask", json={"query": "hi"})
         assert res.status_code == 503
-        assert "GOOGLE_API_KEY" in res.json()["detail"]
+        assert res.json()["detail"] == "Document query service is not configured."
     finally:
         llm.get_llm.cache_clear()
 

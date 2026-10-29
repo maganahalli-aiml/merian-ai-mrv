@@ -19,12 +19,15 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict
+from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from pypdf import PdfReader
 from google.cloud import storage
 
 try:
+    from backend.api.auth import CurrentUser, get_current_user, require_document_manager
     from backend.agent.agents import ProcurementSupervisor
     from backend.api.schemas import AuditRequest, AuditResponse, QueryRequest, QueryResponse
     from backend.config.settings import settings
@@ -33,6 +36,7 @@ try:
     from backend.rag.data_ingestion import ingest_pdf, ingest_stored_pdfs
     from backend.rag.retrieval import ask_question
 except ImportError:  # pragma: no cover - supports running with `--app-dir backend`
+    from api.auth import CurrentUser, get_current_user, require_document_manager
     from agent.agents import ProcurementSupervisor
     from api.schemas import AuditRequest, AuditResponse, QueryRequest, QueryResponse
     from config.settings import settings
@@ -42,9 +46,9 @@ except ImportError:  # pragma: no cover - supports running with `--app-dir backe
     from rag.retrieval import ask_question
 
 health_router = APIRouter(prefix="/api", tags=["Health"])
-status_router = APIRouter(prefix="/api", tags=["Status"])
-agent_router = APIRouter(prefix="/api/agent", tags=["Agent"])
-rag_router = APIRouter(prefix="/api/rag", tags=["RAG"])
+status_router = APIRouter(prefix="/api", tags=["Status"], dependencies=[Depends(get_current_user)])
+agent_router = APIRouter(prefix="/api/agent", tags=["Agent"], dependencies=[Depends(get_current_user)])
+rag_router = APIRouter(prefix="/api/rag", tags=["RAG"], dependencies=[Depends(get_current_user)])
 
 # In-memory upload tracker (reset on restart)
 _upload_history: list[dict] = []
@@ -74,7 +78,7 @@ def _save_local_upload_details(document: dict) -> None:
         json.dump(metadata, metadata_file, indent=2)
 
 
-def _get_local_index_details() -> dict[str, dict[str, int]]:
+def _get_local_index_details(request_id: str) -> dict[str, dict[str, int]]:
     chroma_dir = Path(settings.local_data_dir).expanduser() / "chroma"
     if not chroma_dir.exists():
         return {}
@@ -90,7 +94,7 @@ def _get_local_index_details() -> dict[str, dict[str, int]]:
         collection = client.get_collection("meridian_documents")
         metadatas = collection.get(include=["metadatas"]).get("metadatas") or []
     except Exception as error:
-        log.error("Could not inspect local Chroma documents", error=str(error))
+        log.error("Could not inspect local Chroma documents", error=str(error), request_id=request_id)
         raise HTTPException(status_code=500, detail="Could not inspect the local document index.") from error
 
     indexed: dict[str, _IndexedDocumentDetails] = defaultdict(
@@ -189,17 +193,17 @@ def system_status():
 # ---------------------------------------------------------------------------
 
 @agent_router.post("/audit", response_model=AuditResponse)
-def run_audit(payload: AuditRequest):
+def run_audit(payload: AuditRequest, request: Request):
     """Run the full multi-agent procurement audit and return all phase results."""
     try:
         result = get_supervisor().run_audit(payload.request_text)
         return AuditResponse(**result)
     except ConfigurationError as e:
-        log.error("Audit configuration error", error=str(e))
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        log.error("Audit configuration error", error=str(e), request_id=request.state.request_id)
+        raise HTTPException(status_code=503, detail="Audit service is not configured.") from e
     except Exception as e:
-        log.error("Audit failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("Audit failed", error=str(e), request_id=request.state.request_id)
+        raise HTTPException(status_code=500, detail="Audit failed. Contact support with the request ID.") from e
 
 
 # ---------------------------------------------------------------------------
@@ -207,23 +211,29 @@ def run_audit(payload: AuditRequest):
 # ---------------------------------------------------------------------------
 
 @rag_router.post("/ask", response_model=QueryResponse)
-def rag_query(payload: QueryRequest):
+def rag_query(payload: QueryRequest, request: Request):
     """Query the RAG pipeline using the configured vector store and Gemini."""
     try:
         return QueryResponse(answer=ask_question(payload.query, payload.retriever_type))
     except ConfigurationError as e:
-        log.error("RAG configuration error", error=str(e))
-        raise HTTPException(status_code=503, detail=str(e)) from e
+        log.error("RAG configuration error", error=str(e), request_id=request.state.request_id)
+        raise HTTPException(status_code=503, detail="Document query service is not configured.") from e
     except Exception as e:
-        log.error("RAG query failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("RAG query failed", error=str(e), request_id=request.state.request_id)
+        raise HTTPException(status_code=500, detail="Document query failed. Contact support with the request ID.") from e
 
 
 @rag_router.post("/upload")
-async def upload_documents(files: list[UploadFile] = File(...)):
+async def upload_documents(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    current_user: CurrentUser = Depends(require_document_manager),
+):
     """Accept PDFs, archive them locally or in GCS, then chunk, embed and index them."""
     if not files:
         raise HTTPException(status_code=400, detail="No files provided.")
+    if len(files) > settings.upload_max_files:
+        raise HTTPException(status_code=413, detail="Too many files in one upload request.")
 
     results = []
     tmp_dir = tempfile.mkdtemp()
@@ -239,15 +249,45 @@ async def upload_documents(files: list[UploadFile] = File(...)):
                 })
                 continue
 
-            if settings.app_mode == "local":
-                uploads_dir = Path(settings.local_data_dir).expanduser() / "uploads"
-                uploads_dir.mkdir(parents=True, exist_ok=True)
-                local_path = str(uploads_dir / filename)
-            else:
-                local_path = os.path.join(tmp_dir, filename)
+            if not filename:
+                raise HTTPException(status_code=400, detail="A valid PDF filename is required.")
+            local_path = os.path.join(tmp_dir, f"{uuid4().hex}.pdf")
+            size_bytes = 0
+            with open(local_path, "wb") as local_file:
+                while chunk := await upload.read(64 * 1024):
+                    size_bytes += len(chunk)
+                    if size_bytes > settings.upload_max_file_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"PDF exceeds the {settings.upload_max_file_bytes}-byte file limit.",
+                        )
+                    local_file.write(chunk)
 
-            with open(local_path, "wb") as f:
-                f.write(await upload.read())
+            if size_bytes < 5:
+                raise HTTPException(status_code=400, detail="The uploaded file is not a valid PDF.")
+            with open(local_path, "rb") as pdf_file:
+                if not pdf_file.read(5).startswith(b"%PDF-"):
+                    raise HTTPException(status_code=400, detail="The uploaded file is not a valid PDF.")
+            try:
+                reader = PdfReader(local_path, strict=False)
+                if reader.is_encrypted:
+                    raise HTTPException(status_code=400, detail="Encrypted PDFs are not supported.")
+                page_count = len(reader.pages)
+            except HTTPException:
+                raise
+            except Exception as pdf_error:
+                log.info(
+                    "Rejected unreadable uploaded PDF",
+                    filename=filename,
+                    error=str(pdf_error),
+                    request_id=request.state.request_id,
+                )
+                raise HTTPException(status_code=400, detail="The uploaded PDF could not be read.") from pdf_error
+            if page_count > settings.upload_max_pdf_pages:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"PDF exceeds the {settings.upload_max_pdf_pages}-page limit.",
+                )
 
             if settings.app_mode == "cloud":
                 try:
@@ -256,11 +296,20 @@ async def upload_documents(files: list[UploadFile] = File(...)):
                     bucket.blob(gcs_path).upload_from_filename(local_path, content_type="application/pdf")
                     log.info("File saved to GCS", filename=filename, gcs_path=f"gs://{settings.GCS_BUCKET_NAME}/{gcs_path}")
                 except Exception as gcs_err:
-                    log.error("Could not save uploaded PDF to GCS", filename=filename, error=str(gcs_err))
+                    log.error(
+                        "Could not save uploaded PDF to GCS",
+                        filename=filename,
+                        error=str(gcs_err),
+                        request_id=request.state.request_id,
+                    )
                     raise HTTPException(
                         status_code=502,
-                        detail=f"Could not save uploaded PDF to Cloud Storage: {gcs_err}",
+                        detail="Could not save the uploaded PDF to Cloud Storage.",
                     ) from gcs_err
+            else:
+                uploads_dir = Path(settings.local_data_dir).expanduser() / "uploads"
+                uploads_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(local_path, uploads_dir / filename)
 
             # ingest_pdf is slow and blocking, so run it in a worker thread to keep the server responsive
             source = (
@@ -286,7 +335,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
                 "pages": result.get("pages"),
                 "chunks": result.get("chunks"),
                 "reason": result.get("reason"),
-                "size_bytes": Path(local_path).stat().st_size,
+                "size_bytes": size_bytes,
                 "uploaded_at": datetime.now(timezone.utc).isoformat(),
             }
             results.append(document_details)
@@ -295,8 +344,13 @@ async def upload_documents(files: list[UploadFile] = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        log.error("Upload failed", traceback=traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error(
+            "Upload failed",
+            traceback=traceback.format_exc(),
+            request_id=request.state.request_id,
+            user_id=current_user.uid,
+        )
+        raise HTTPException(status_code=500, detail="Upload failed. Contact support with the request ID.") from e
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -305,7 +359,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
 
 
 @rag_router.get("/uploads")
-def list_uploads():
+def list_uploads(request: Request):
     """Return documents persisted locally or in the configured Cloud Storage bucket."""
     if settings.app_mode == "local":
         uploads_dir = Path(settings.local_data_dir).expanduser() / "uploads"
@@ -315,19 +369,24 @@ def list_uploads():
                 with metadata_path.open(encoding="utf-8") as metadata_file:
                     metadata = json.load(metadata_file)
             except (OSError, json.JSONDecodeError) as error:
-                log.error("Could not read local upload details", error=str(error))
+                log.error("Could not read local upload details", error=str(error), request_id=request.state.request_id)
                 raise HTTPException(status_code=500, detail="Could not read local upload details.") from error
         else:
             metadata = {}
 
-        index_details = _get_local_index_details()
+        index_details = _get_local_index_details(request.state.request_id)
         uploads = []
         if uploads_dir.exists():
             for pdf_path in sorted(uploads_dir.glob("*.pdf"), key=lambda path: path.name.lower()):
                 try:
                     file_stat = pdf_path.stat()
                 except OSError as error:
-                    log.error("Could not inspect local upload", filename=pdf_path.name, error=str(error))
+                    log.error(
+                        "Could not inspect local upload",
+                        filename=pdf_path.name,
+                        error=str(error),
+                        request_id=request.state.request_id,
+                    )
                     raise HTTPException(
                         status_code=500,
                         detail=f"Could not inspect local upload: {pdf_path.name}",
@@ -376,15 +435,18 @@ def list_uploads():
         uploads.sort(key=lambda upload: upload["filename"].lower())
         return {"uploads": uploads}
     except Exception as error:
-        log.error("Could not list cloud uploads", error=str(error))
+        log.error("Could not list cloud uploads", error=str(error), request_id=request.state.request_id)
         raise HTTPException(
             status_code=502,
-            detail=f"Could not list stored documents from Cloud Storage: {error}",
+            detail="Could not list stored documents from Cloud Storage.",
         ) from error
 
 
 @rag_router.post("/ingest-gcs")
-def trigger_gcs_ingestion():
+def trigger_gcs_ingestion(
+    request: Request,
+    current_user: CurrentUser = Depends(require_document_manager),
+):
     """Index every PDF that is already in the GCS bucket."""
     if settings.app_mode != "cloud":
         raise HTTPException(
@@ -395,5 +457,10 @@ def trigger_gcs_ingestion():
         totals = ingest_stored_pdfs()
         return {"status": "GCS ingestion complete", **totals}
     except Exception as e:
-        log.error("GCS ingestion failed", traceback=traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error(
+            "GCS ingestion failed",
+            traceback=traceback.format_exc(),
+            request_id=request.state.request_id,
+            user_id=current_user.uid,
+        )
+        raise HTTPException(status_code=500, detail="Document ingestion failed. Contact support with the request ID.") from e

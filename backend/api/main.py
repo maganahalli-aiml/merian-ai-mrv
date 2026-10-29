@@ -16,16 +16,22 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
 
 try:
+    from backend.api.auth import auth_router
     from backend.api.endpoints import agent_router, health_router, rag_router, status_router
+    from backend.api.middleware import RequestSecurityMiddleware, RequestTooLarge
     from backend.config.settings import settings
     from backend.logger import _LOGGER_INSTANCE
     from backend.logger import GLOBAL_LOGGER as log
 except ImportError:  # pragma: no cover - supports running with `--app-dir backend`
+    from api.auth import auth_router
     from api.endpoints import agent_router, health_router, rag_router, status_router
+    from api.middleware import RequestSecurityMiddleware, RequestTooLarge
     from config.settings import settings
     from logger import _LOGGER_INSTANCE
     from logger import GLOBAL_LOGGER as log
@@ -43,17 +49,30 @@ app = FastAPI(
     version=settings.app_version,
     description="Multi-agent procurement audit & RAG document intelligence backend.",
     lifespan=lifespan,
+    docs_url=None if settings.is_cloud else "/docs",
+    redoc_url=None if settings.is_cloud else "/redoc",
+    openapi_url=None if settings.is_cloud else "/openapi.json",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],            # Tighten in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+app.add_middleware(RequestSecurityMiddleware)
+
+
+@app.exception_handler(RequestTooLarge)
+async def request_too_large_handler(request: Request, _: RequestTooLarge) -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={"detail": "Upload request exceeds the configured size limit."},
+    )
 
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(status_router)
 app.include_router(agent_router)
 app.include_router(rag_router)

@@ -1,16 +1,32 @@
 /**
  * api.ts — Centralized API client for the FastAPI backend.
  */
+import { firebaseAuth } from "./firebase";
 
-const BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "http://localhost:8080" : "");
+const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 async function request<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, options);
+  const headers = new Headers(options.headers);
+  const user = firebaseAuth?.currentUser;
+  if (user) headers.set("Authorization", `Bearer ${await user.getIdToken()}`);
+  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `HTTP ${res.status}`);
+    const requestId = res.headers.get("x-request-id");
+    const detail = typeof body.detail === "string" ? body.detail : `HTTP ${res.status}`;
+    throw new Error(requestId && res.status >= 500 ? `${detail} (Reference: ${requestId})` : detail);
   }
   return res.json();
+}
+
+export interface CurrentUserProfile {
+  uid: string;
+  email: string;
+  can_manage_documents: boolean;
+}
+
+export async function getCurrentUser() {
+  return request<CurrentUserProfile>("/api/auth/me");
 }
 
 // ─── RAG ─────────────────────────────────────────────────────

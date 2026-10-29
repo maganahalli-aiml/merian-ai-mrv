@@ -225,7 +225,7 @@ export default function DocumentUploadTab() {
                     </div>
                     <div>
                       <p className="text-base font-semibold text-card-foreground">Choose files or drag and drop</p>
-                      <p className="text-sm text-muted-foreground mt-1">PDF documents only · Up to 50MB per file</p>
+                      <p className="text-sm text-muted-foreground mt-1">PDF documents only · Server-enforced file, request, and page limits</p>
                     </div>
                   </div>
                 </div>
